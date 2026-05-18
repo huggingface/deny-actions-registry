@@ -164,30 +164,78 @@ def gh_api(method: str, path: str, body: dict | None = None):
         return None
 
 
+def fetch_pr_commentable_lines() -> dict[str, set[int]]:
+    """Return {filename: {line_numbers_in_diff_RIGHT_side}}.
+
+    GitHub PR review API only accepts inline comments on lines that are
+    part of the PR's diff hunks (added or context lines on the new file).
+    Any other (path, line) returns 422 Unprocessable Entity.
+    """
+    commentable: dict[str, set[int]] = {}
+    page = 1
+    hunk_re = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+    while True:
+        files = gh_api("GET", f"/repos/{GH_REPO}/pulls/{PR_NUMBER}/files?per_page=100&page={page}")
+        if not files:
+            break
+        for f in files:
+            path = f["filename"]
+            patch = f.get("patch") or ""
+            lines: set[int] = commentable.setdefault(path, set())
+            cur = 0
+            for ln in patch.split("\n"):
+                m = hunk_re.match(ln)
+                if m:
+                    cur = int(m.group(1))
+                    continue
+                if not ln:
+                    continue
+                first = ln[0]
+                if first == "+" and not ln.startswith("+++"):
+                    lines.add(cur)
+                    cur += 1
+                elif first == " ":
+                    lines.add(cur)
+                    cur += 1
+                elif first == "-":
+                    pass  # removed, doesn't advance new-file cursor
+        if len(files) < 100:
+            break
+        page += 1
+    return commentable
+
+
 def post_pr_suggestions(fixable, unfixable):
-    """Post one PR review with inline suggestions for fixable violations."""
+    """Post one PR review with inline suggestions for fixable violations.
+
+    Violations on files/lines outside the PR diff cannot be commented inline
+    (GitHub API limitation) — those are reported in the review body instead.
+    """
     if not PR_NUMBER or not GH_TOKEN or not GH_REPO or not PR_HEAD_SHA:
         sys.stderr.write("[suggestions] not a PR context, skipping.\n")
         return
     if PR_HEAD_REPO and PR_HEAD_REPO != GH_REPO:
         sys.stderr.write(f"[suggestions] PR from fork ({PR_HEAD_REPO}), "
-                         "skipping inline suggestions (fork PRs can't be "
-                         "commented inline with our token).\n")
+                         "skipping inline suggestions.\n")
         return
     if not fixable and not unfixable:
         return
 
+    commentable = fetch_pr_commentable_lines()
+
     comments = []
+    out_of_diff_fixable: list[tuple[str, int, str, str]] = []
     for fpath, items in fixable.items():
+        allowed = commentable.get(fpath, set())
         for ln, cur, sug in items:
-            # Use the leading whitespace from the original line.
+            if ln not in allowed:
+                out_of_diff_fixable.append((fpath, ln, cur.strip(), sug.strip()))
+                continue
             indent_match = re.match(r"^(\s*)", cur)
             indent = indent_match.group(1) if indent_match else ""
             sug_line = sug.lstrip("\n")
-            sug_clean = sug_line.lstrip()
-            # If pinact's `+` line dropped the indent, restore it.
             if not sug_line.startswith(indent):
-                sug_line = indent + sug_clean
+                sug_line = indent + sug_line.lstrip()
             comments.append({
                 "path": fpath,
                 "line": ln,
@@ -200,13 +248,21 @@ def post_pr_suggestions(fixable, unfixable):
                 ),
             })
 
-    body_lines = ["**Pinact** found one or more unpinned actions in this PR."]
-    if fixable:
+    body_lines = ["**Pinact** found unpinned actions in this repo."]
+    if comments:
         body_lines.append(
-            f"\n{sum(len(v) for v in fixable.values())} suggestion(s) below "
-            "— click *Apply suggestion* on each, or run `pinact run` locally "
-            "and commit the diff."
+            f"\n{len(comments)} inline suggestion(s) below — click "
+            "*Apply suggestion* on each."
         )
+    if out_of_diff_fixable:
+        body_lines.append(
+            "\n**Auto-fixable, but outside this PR's diff** "
+            "(run `pinact run` locally and commit):"
+        )
+        for fpath, ln, cur, sug in out_of_diff_fixable:
+            cur_disp = cur.replace("uses: ", "")
+            sug_disp = short_sha(sug.replace("uses: ", ""))
+            body_lines.append(f"- `{fpath}:{ln}` — `{cur_disp}` → `{sug_disp}`")
     if unfixable:
         body_lines.append("\n**Need manual fix** (pinact cannot resolve):")
         for fpath in sorted(unfixable):
@@ -223,8 +279,11 @@ def post_pr_suggestions(fixable, unfixable):
 
     result = gh_api("POST", f"/repos/{GH_REPO}/pulls/{PR_NUMBER}/reviews", review)
     if result:
-        sys.stderr.write(f"[suggestions] posted review with "
-                         f"{len(comments)} suggestion(s).\n")
+        sys.stderr.write(
+            f"[suggestions] posted review: {len(comments)} inline + "
+            f"{len(out_of_diff_fixable)} out-of-diff fixable + "
+            f"{sum(len(v) for v in unfixable.values())} unfixable.\n"
+        )
 
 
 def main():
