@@ -1,0 +1,29 @@
+name: advisory-sync
+
+# TODO — not yet implemented.
+#
+# Daily cron that:
+#   1. Lists all actions used across huggingface/* workflows
+#      (via `gh search code "uses:" --owner huggingface`).
+#   2. Queries GitHub Advisory DB and OSV.dev for each action.
+#   3. If a new advisory is found that is not already in denylist.yaml,
+#      opens an auto-PR adding the entry and pings Slack.
+#
+# Until implemented, the denylist is maintained by hand via PRs.
+
+on:
+  schedule:
+    - cron: "0 6 * * *"  # 06:00 UTC daily
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Placeholder
+        run: |
+          echo "advisory-sync is not yet implemented."
+          echo "Track progress: https://github.com/huggingface/deny-actions-registry/issues"

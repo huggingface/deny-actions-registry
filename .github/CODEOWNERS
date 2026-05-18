@@ -1,0 +1,9 @@
+# Everything requires review from the IT/security team.
+# Adjust the team handle once the GitHub team exists.
+
+*                          @paulinebm
+
+# Denylist + workflows + check script are critical — keep tight ownership.
+/denylist.yaml             @paulinebm
+/.github/workflows/        @paulinebm
+/scripts/                  @paulinebm

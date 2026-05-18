@@ -1,0 +1,46 @@
+version: 1
+
+# Format:
+#   - action: <owner>/<repo>
+#     bad_shas:        # 40-char commit SHAs to block
+#       - <sha>
+#     bad_versions:    # human-readable, informational only (the check uses bad_shas)
+#       - <tag or range>
+#     reason: <short text>
+#     advisory: <url>
+#     severity: critical | high | medium | low
+#     added: YYYY-MM-DD
+#     added_by: <email or bot>
+
+entries:
+  - action: tj-actions/changed-files
+    bad_shas:
+      - 0e58ed8671d6b60d0890c21b07f8835ace038e67
+    bad_versions:
+      - "<= v45.0.7"
+    reason: "CVE-2025-30066 — payload exfiltrated CI secrets to build logs"
+    advisory: https://github.com/advisories/GHSA-mrrh-fwg8-r2c3
+    severity: critical
+    added: 2025-03-15
+    added_by: pauline@huggingface.co
+
+  - action: reviewdog/action-setup
+    bad_shas:
+      - 3f401fe1d58fe77e10d4e6e0c16193cf7dba1fbf
+    bad_versions:
+      - v1.3.0
+    reason: "CVE-2025-30154 — supply-chain compromise, March 2025"
+    advisory: https://github.com/advisories/GHSA-mrrh-fwg8-r2c3
+    severity: critical
+    added: 2025-03-17
+    added_by: pauline@huggingface.co
+
+  - action: rtCamp/action-slack-notify
+    bad_shas: []
+    bad_versions:
+      - v1.0.0
+    reason: "Known credential leakage in early versions"
+    advisory: ""
+    severity: high
+    added: 2026-05-18
+    added_by: pauline@huggingface.co
