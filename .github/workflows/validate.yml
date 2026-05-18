@@ -92,11 +92,10 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "chore(security): auto-pin GitHub Actions to SHAs
-
-Pinned by huggingface/deny-actions-registry validate.yml.
-
-Co-authored-by: ${AUTHOR_LOGIN} <${AUTHOR_ID}+${AUTHOR_LOGIN}@users.noreply.github.com>"
+          git commit \
+            -m "chore(security): auto-pin GitHub Actions to SHAs" \
+            -m "Pinned by huggingface/deny-actions-registry validate.yml." \
+            -m "Co-authored-by: ${AUTHOR_LOGIN} <${AUTHOR_ID}+${AUTHOR_LOGIN}@users.noreply.github.com>"
 
           git push origin "HEAD:${BRANCH}"
           echo "pushed=true" >> "$GITHUB_OUTPUT"
