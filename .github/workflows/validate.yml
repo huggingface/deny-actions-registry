@@ -1,25 +1,32 @@
 name: validate
 
-# Reusable workflow called by other repos in the org, typically via
-# an Organization Ruleset configured as "Required workflow".
+# Validates GitHub Actions in the caller repo. Two ways to invoke:
+#
+#   A. Organization Ruleset → "Require workflows to pass before merging"
+#      (recommended). GitHub triggers this file directly on PRs in target
+#      repos via the `pull_request` trigger below — no caller workflow
+#      file needed.
+#
+#   B. Caller-defined workflow that calls this one with `uses:` (legacy /
+#      opt-in mode). Requires the `workflow_call` trigger below.
 #
 # Two checks against the caller repo's workflows:
 #   1. pinact : every `uses:` must be pinned to a 40-char SHA.
 #   2. denylist : no `uses:` may reference a SHA listed in this repo's
 #      denylist.yaml.
 #
-# On pull_request events, fixable violations are posted as inline
-# `Apply suggestion` review comments — never auto-pushed. The PR author
-# clicks each suggestion to accept the pin. This avoids granting the
-# caller's GITHUB_TOKEN any write scope on workflow files.
+# Fixable violations are posted as inline `Apply suggestion` review
+# comments — never auto-pushed. The PR author clicks each suggestion to
+# accept the pin. This avoids granting any write scope on workflow files.
 #
-# Caller workflow MUST grant:
+# When invoked via mode B, the caller workflow MUST grant:
 #   permissions:
 #     contents: read           # to read workflow files
 #     pull-requests: write     # to post the inline suggestions
 
 on:
   workflow_call:
+  pull_request:
 
 jobs:
   pinact-check:
