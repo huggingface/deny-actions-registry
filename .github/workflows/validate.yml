@@ -9,24 +9,32 @@ name: validate
 #   2. denylist scan  : no `uses:` may reference a SHA listed in
 #      denylist.yaml of this repo.
 #
-# Either check failing blocks the PR (when wired as a required check).
+# When invoked on a pull_request event with `pull-requests: write`
+# permission, pinact violations are posted as a PR review with
+# `Apply suggestion` blocks so the dev can fix in one click.
 
 on:
   workflow_call:
-    inputs:
-      pinact-config:
-        description: "Path to .pinact.yaml in caller repo (optional)"
-        required: false
-        type: string
-        default: ".pinact.yaml"
 
 jobs:
   pinact-check:
     name: Pin check (SHA + comment)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - name: Checkout caller repo
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          path: caller
+
+      - name: Checkout deny-actions-registry
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          repository: huggingface/deny-actions-registry
+          path: registry
+          ref: main
 
       - name: Install pinact
         run: |
@@ -40,6 +48,7 @@ jobs:
 
       - name: Run pinact in check mode
         id: pinact
+        working-directory: caller
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
@@ -47,121 +56,22 @@ jobs:
           pinact run --check 2>&1 | tee /tmp/pinact.out
           echo "exitcode=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
 
-      - name: Build job summary
+      - name: Report violations (summary + PR suggestions)
         if: always()
         env:
           PINACT_EXITCODE: ${{ steps.pinact.outputs.exitcode }}
-        run: |
-          python3 <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import os, re, glob
-          from collections import defaultdict
+          PINACT_OUTPUT: /tmp/pinact.out
+          CALLER_DIR: caller
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: python3 registry/scripts/report-pinact.py
 
-          ec = os.environ.get("PINACT_EXITCODE", "0")
-          ansi = re.compile(r"\x1b\[[0-9;]*m")
-          ann  = re.compile(r"^::error file=([^,]+),line=(\d+),title=pinact error::(.*)$")
-
-          with open("/tmp/pinact.out") as f:
-              raw = ansi.sub("", f.read())
-
-          # Pinact emits 3 kinds of entries per violation:
-          #   ::error file=PATH,line=N,title=pinact error::SUGGESTED
-          #   -        uses: OLD
-          #   +        uses: NEW
-          # or, for unfixable cases:
-          #   ::error file=PATH,line=N,title=pinact error::ERROR MESSAGE
-          fixable   = defaultdict(list)   # file -> [(line, current, suggested), ...]
-          unfixable = defaultdict(list)   # file -> [(line, message, snippet), ...]
-
-          lines = raw.splitlines()
-          i = 0
-          while i < len(lines):
-              m = ann.match(lines[i])
-              if not m:
-                  i += 1
-                  continue
-              fpath, ln, content = m.group(1), int(m.group(2)), m.group(3).strip()
-              current = suggested = None
-              # peek next few lines for the diff
-              for j in range(i + 1, min(i + 5, len(lines))):
-                  s = lines[j].rstrip()
-                  if s.startswith("-") and "uses:" in s:
-                      current = s.lstrip("-").strip()
-                  elif s.startswith("+") and "uses:" in s:
-                      suggested = s.lstrip("+").strip()
-                      break
-              if current and suggested:
-                  fixable[fpath].append((ln, current, suggested))
-              else:
-                  # find the offending line snippet if present
-                  snippet = ""
-                  for j in range(i + 1, min(i + 5, len(lines))):
-                      s = lines[j].strip()
-                      if "uses:" in s:
-                          snippet = s
-                          break
-                  unfixable[fpath].append((ln, content, snippet))
-              i += 1
-
-          n_files = len(glob.glob(".github/workflows/*.yml") + glob.glob(".github/workflows/*.yaml"))
-          n_uses  = 0
-          for p in glob.glob(".github/workflows/*.y*ml"):
-              with open(p) as f:
-                  for line in f:
-                      if re.match(r"^\s*-?\s*uses:\s*\S", line):
-                          n_uses += 1
-
-          total_fix   = sum(len(v) for v in fixable.values())
-          total_unfix = sum(len(v) for v in unfixable.values())
-          total       = total_fix + total_unfix
-
-          print("## Pinact — pin check")
-          print("")
-          if ec == "0":
-              print("**Result:** ✅ Passed")
-          else:
-              print(f"**Result:** ❌ Failed — {total} violation(s) across {len(fixable) + len(unfixable)} file(s)")
-          print("")
-          print("| Workflows scanned | `uses:` references | Auto-fixable | Need manual fix |")
-          print("|---|---|---|---|")
-          print(f"| {n_files} | {n_uses} | {total_fix} | {total_unfix} |")
-          print("")
-
-          def short_sha(use):
-              # Replace @<40-char-sha> with @<short>… for readability
-              return re.sub(r"@([0-9a-f]{40})", lambda m: "@" + m.group(1)[:10] + "…", use)
-
-          if fixable:
-              print("### Auto-fixable — run `pinact run` locally to apply")
-              print("")
-              for fpath in sorted(fixable):
-                  print(f"#### `{fpath}`")
-                  print("")
-                  print("| Line | Current | Suggested |")
-                  print("|---|---|---|")
-                  for ln, cur, sug in fixable[fpath]:
-                      print(f"| {ln} | `{cur.replace('uses: ', '')}` | `{short_sha(sug.replace('uses: ', ''))}` |")
-                  print("")
-
-          if unfixable:
-              print("### Need manual fix")
-              print("")
-              for fpath in sorted(unfixable):
-                  print(f"#### `{fpath}`")
-                  print("")
-                  print("| Line | Reference | Problem |")
-                  print("|---|---|---|")
-                  for ln, msg, snip in unfixable[fpath]:
-                      ref = snip.replace("uses: ", "") if snip else "—"
-                      print(f"| {ln} | `{ref}` | {msg} |")
-                  print("")
-
-          if ec != "0":
-              print("---")
-              print("> **How to fix:** run `pinact run` locally in the caller repo, then commit the diff.")
-              print("> Tags like `@latest` or non-SHA refs (`@1.2.3` not matching a commit) need to be replaced by a real SHA.")
-          PY
-
-          exit "${PINACT_EXITCODE}"
+      - name: Fail if pinact found violations
+        if: always()
+        run: exit "${{ steps.pinact.outputs.exitcode }}"
 
   denylist-check:
     name: Denylist check
