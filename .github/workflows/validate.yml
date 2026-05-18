@@ -8,14 +8,15 @@ name: validate
 #   2. denylist : no `uses:` may reference a SHA listed in this repo's
 #      denylist.yaml.
 #
-# On pull_request events from the SAME repo (not a fork), pinact also
-# auto-fixes fixable violations by committing & pushing to the PR head
-# branch. Forks fall back to inline suggestions only.
+# On pull_request events, fixable violations are posted as inline
+# `Apply suggestion` review comments — never auto-pushed. The PR author
+# clicks each suggestion to accept the pin. This avoids granting the
+# caller's GITHUB_TOKEN any write scope on workflow files.
 #
 # Caller workflow MUST grant:
 #   permissions:
-#     contents: write          # for the auto-pin commit/push
-#     pull-requests: write     # for the fallback PR review suggestions
+#     contents: read           # to read workflow files
+#     pull-requests: write     # to post the inline suggestions
 
 on:
   workflow_call:
@@ -25,7 +26,7 @@ jobs:
     name: Pin check (SHA + comment)
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
       pull-requests: write
     steps:
       - name: Checkout caller repo (PR branch if PR)
@@ -34,9 +35,7 @@ jobs:
           path: caller
           # ref: empty on push events → default branch; on PRs → head branch
           ref: ${{ github.event.pull_request.head.ref || github.ref }}
-          # token is needed for the auto-pin push
-          token: ${{ github.token }}
-          persist-credentials: true
+          persist-credentials: false
 
       - name: Checkout deny-actions-registry
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
@@ -44,6 +43,7 @@ jobs:
           repository: huggingface/deny-actions-registry
           path: registry
           ref: main
+          persist-credentials: false
 
       - name: Install pinact
         run: |
@@ -65,49 +65,12 @@ jobs:
           pinact run --check 2>&1 | tee /tmp/pinact.out
           echo "exitcode=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
 
-      - name: Auto-pin & push commit (same-repo PRs only)
-        id: autofix
-        if: |
-          github.event_name == 'pull_request' &&
-          github.event.pull_request.head.repo.full_name == github.repository &&
-          steps.pinact.outputs.exitcode != '0'
-        working-directory: caller
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          BRANCH: ${{ github.event.pull_request.head.ref }}
-          AUTHOR_LOGIN: ${{ github.event.pull_request.user.login }}
-          AUTHOR_ID: ${{ github.event.pull_request.user.id }}
-        run: |
-          set -euo pipefail
-          # Auto-pin everything pinact can resolve (unfixable cases like
-          # @latest or invalid SHA refs are left alone).
-          pinact run || true
-
-          if git diff --quiet; then
-            echo "::notice::Pinact had nothing auto-fixable (likely only unfixable cases remain)."
-            echo "pushed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit \
-            -m "chore(security): auto-pin GitHub Actions to SHAs" \
-            -m "Pinned by huggingface/deny-actions-registry validate.yml." \
-            -m "Co-authored-by: ${AUTHOR_LOGIN} <${AUTHOR_ID}+${AUTHOR_LOGIN}@users.noreply.github.com>"
-
-          git push origin "HEAD:${BRANCH}"
-          echo "pushed=true" >> "$GITHUB_OUTPUT"
-          echo "::notice::Auto-pinned ${BRANCH}. Note: GITHUB_TOKEN pushes do not re-trigger workflows. Re-run this job or push another commit to validate."
-
-      - name: Report violations (summary)
+      - name: Report violations (summary + PR review suggestions)
         if: always()
         env:
           PINACT_EXITCODE: ${{ steps.pinact.outputs.exitcode }}
           PINACT_OUTPUT: /tmp/pinact.out
           CALLER_DIR: caller
-          AUTOFIX_PUSHED: ${{ steps.autofix.outputs.pushed }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -127,6 +90,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           path: caller
+          persist-credentials: false
 
       - name: Checkout deny-actions-registry
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
@@ -134,6 +98,7 @@ jobs:
           repository: huggingface/deny-actions-registry
           path: registry
           ref: main
+          persist-credentials: false
 
       - name: Install yq
         run: |
