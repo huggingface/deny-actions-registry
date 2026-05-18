@@ -2,13 +2,15 @@
 """
 Parse pinact --check output and:
   1. Render a GitHub Actions job summary (Markdown).
-  2. On pull_request events with the right permissions, post a PR review
-     with `Apply suggestion` blocks for each auto-fixable violation.
+  2. For fork PRs only, post a PR review with `Apply suggestion` blocks for
+     each auto-fixable violation. (Same-repo PRs get an auto-pin commit
+     pushed by the calling workflow before this script runs.)
 
 Environment variables (all optional; missing ones disable features gracefully):
   PINACT_OUTPUT     path to the captured pinact stdout (default: /tmp/pinact.out)
   PINACT_EXITCODE   pinact's exit code as a string
   CALLER_DIR        directory containing the caller repo (default: caller)
+  AUTOFIX_PUSHED    "true" if an auto-pin commit was just pushed
   GH_TOKEN          GITHUB_TOKEN with pull-requests:write
   GH_REPO           "owner/repo" of the PR
   PR_NUMBER         PR number (as string); empty means "not a PR"
@@ -28,15 +30,17 @@ from collections import defaultdict
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 ANN  = re.compile(r"^::error file=([^,]+),line=(\d+),title=pinact error::(.*)$")
 
-PINACT_OUTPUT  = os.environ.get("PINACT_OUTPUT", "/tmp/pinact.out")
+PINACT_OUTPUT   = os.environ.get("PINACT_OUTPUT", "/tmp/pinact.out")
 PINACT_EXITCODE = os.environ.get("PINACT_EXITCODE", "0")
-CALLER_DIR     = os.environ.get("CALLER_DIR", "caller")
-GH_TOKEN       = os.environ.get("GH_TOKEN", "")
-GH_REPO        = os.environ.get("GH_REPO", "")
-PR_NUMBER      = os.environ.get("PR_NUMBER", "")
-PR_HEAD_SHA    = os.environ.get("PR_HEAD_SHA", "")
-PR_HEAD_REPO   = os.environ.get("PR_HEAD_REPO", "")
-SUMMARY_FILE   = os.environ.get("GITHUB_STEP_SUMMARY", "/dev/stdout")
+CALLER_DIR      = os.environ.get("CALLER_DIR", "caller")
+AUTOFIX_PUSHED  = os.environ.get("AUTOFIX_PUSHED", "") == "true"
+GH_TOKEN        = os.environ.get("GH_TOKEN", "")
+GH_REPO         = os.environ.get("GH_REPO", "")
+PR_NUMBER       = os.environ.get("PR_NUMBER", "")
+PR_HEAD_SHA     = os.environ.get("PR_HEAD_SHA", "")
+PR_HEAD_REPO    = os.environ.get("PR_HEAD_REPO", "")
+SUMMARY_FILE    = os.environ.get("GITHUB_STEP_SUMMARY", "/dev/stdout")
+IS_FORK         = bool(PR_HEAD_REPO and PR_HEAD_REPO != GH_REPO)
 
 
 def parse_pinact_output(text: str):
@@ -112,12 +116,29 @@ def write_summary(fixable, unfixable, n_files, n_uses, ec):
         w(f"| {n_files} | {n_uses} | {total_fix} | {total_unfix} |")
         w()
 
-        if fixable:
-            w("### Auto-fixable")
+        if AUTOFIX_PUSHED:
+            w("> 🤖 **Auto-pinned and pushed a fix commit** to this PR's branch. "
+              "GitHub does not re-trigger workflows on bot-pushed commits — "
+              "click **Re-run all jobs** above (or push any other commit) to "
+              "re-validate.")
             w()
-            w("Pinact found these and the bot has posted `Apply suggestion` "
-              "blocks on the PR review. Click each suggestion in the *Files "
-              "changed* tab, or run `pinact run` locally and commit the diff.")
+
+        if fixable:
+            if AUTOFIX_PUSHED:
+                heading = "### Auto-fixed in the just-pushed commit"
+                intro   = "The bot pinned these to their SHAs in a follow-up commit."
+            elif IS_FORK:
+                heading = "### Auto-fixable (suggestions posted as PR review)"
+                intro   = ("This PR comes from a fork, so the bot cannot push a "
+                           "fix commit. Apply the inline suggestions instead, or "
+                           "run `pinact run` locally.")
+            else:
+                heading = "### Auto-fixable"
+                intro   = ("Run `pinact run` locally and commit, or re-run "
+                           "this workflow to let the bot push a fix.")
+            w(heading)
+            w()
+            w(intro)
             w()
             for fpath in sorted(fixable):
                 w(f"#### `{fpath}`")
@@ -208,14 +229,16 @@ def fetch_pr_commentable_lines() -> dict[str, set[int]]:
 def post_pr_suggestions(fixable, unfixable):
     """Post one PR review with inline suggestions for fixable violations.
 
-    Violations on files/lines outside the PR diff cannot be commented inline
-    (GitHub API limitation) — those are reported in the review body instead.
+    Only runs on fork PRs — same-repo PRs are handled by the workflow's
+    auto-pin commit step before this script runs. Violations on files/lines
+    outside the PR diff cannot be commented inline (GitHub API limitation)
+    — those are reported in the review body instead.
     """
     if not PR_NUMBER or not GH_TOKEN or not GH_REPO or not PR_HEAD_SHA:
         sys.stderr.write("[suggestions] not a PR context, skipping.\n")
         return
-    if PR_HEAD_REPO and PR_HEAD_REPO != GH_REPO:
-        sys.stderr.write(f"[suggestions] PR from fork ({PR_HEAD_REPO}), "
+    if not IS_FORK:
+        sys.stderr.write("[suggestions] same-repo PR, auto-pin handled the fix — "
                          "skipping inline suggestions.\n")
         return
     if not fixable and not unfixable:
