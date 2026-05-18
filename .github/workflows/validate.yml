@@ -186,9 +186,7 @@ jobs:
           sudo chmod +x /usr/local/bin/yq
 
       - name: Run denylist check
-        env:
-          GITHUB_STEP_SUMMARY: ${{ env.GITHUB_STEP_SUMMARY }}
         run: |
-          ./registry/scripts/check.sh \
+          bash ./registry/scripts/check.sh \
             ./registry/denylist.yaml \
             ./caller/.github/workflows
