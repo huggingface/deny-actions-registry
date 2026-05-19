@@ -1,46 +1,284 @@
-version: 1
+version: 2
 
 # Format:
 #   - action: <owner>/<repo>
-#     bad_shas:        # 40-char commit SHAs to block
+#     bad_shas:        # 40-char commit SHAs the validator blocks at PR time
 #       - <sha>
-#     bad_versions:    # human-readable, informational only (the check uses bad_shas)
+#     bad_versions:    # human-readable tag range, informational only
 #       - <tag or range>
 #     reason: <short text>
-#     advisory: <url>
+#     cve: <CVE-YYYY-NNNNN>           # optional, machine-readable identifier
+#     advisory: <url>                  # primary advisory (GHSA or upstream)
+#     references:                      # optional, extra postmortem / IOC sources
+#       - <url>
+#     incident: <slug>                 # groups entries from the same cascade
+#     fixed_in: <tag or sha>           # known-good version published after the fix
+#     confidence: ghsa | ghsa-version-only | unit42-ioc | upstream-postmortem | community
 #     severity: critical | high | medium | low
 #     added: YYYY-MM-DD
 #     added_by: <email or bot>
+#     notes: <free text>               # caveats, blocking strategy, etc.
+#
+# Notes:
+#   * The validator only enforces `bad_shas`. `bad_versions` is documentation —
+#     `pinact`'s tag-comment + min_age checks catch unpinned references and
+#     freshly force-pushed tags before this list does.
+#   * Cascade incidents (e.g. reviewdog → tj-actions, March 2025) share an
+#     `incident:` slug so they can be reviewed/retired together.
+#   * `confidence` answers "where did this SHA come from?" so reviewers can
+#     judge each entry. `ghsa` = published in a GitHub Security Advisory;
+#     `unit42-ioc` = IOC table in Palo Alto Unit 42 research, not in the GHSA;
+#     `upstream-postmortem` = victim's own postmortem.
 
 entries:
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Incident: tj-actions-cascade-2025-03
+  # Root cause: PAT theft via spotbugs/sonar-findbugs pull_request_target
+  # exploit (Nov 2024) → reviewdog/action-setup tag hijack → tj-actions
+  # PAT compromise → ~23k repos exfiltrated CI secrets to workflow logs.
+  # Disclosed 2025-03-14. CISA Alert AA25-077A.
+  # ──────────────────────────────────────────────────────────────────────
+
   - action: tj-actions/changed-files
     bad_shas:
-      - 0e58ed8671d6b60d0890c21b07f8835ace038e67
+      - 0e58ed8671d6b60d0890c21b07f8835ace038e67   # tagged as v1–v45 during compromise
+      - 6e6023c01918b353229af0881232f601a4cc8365   # dangling commit, Coinbase-targeted first stage
     bad_versions:
       - "<= v45.0.7"
-    reason: "CVE-2025-30066 — payload exfiltrated CI secrets to build logs"
+    reason: "CVE-2025-30066 — malicious commit dumped CI runner memory (secrets) into workflow logs"
+    cve: CVE-2025-30066
     advisory: https://github.com/advisories/GHSA-mrrh-fwg8-r2c3
+    references:
+      - https://www.cisa.gov/news-events/alerts/2025/03/18/supply-chain-compromise-third-party-tj-actionschanged-files-cve-2025-30066-and-reviewdogaction
+      - https://www.stepsecurity.io/blog/harden-runner-detection-tj-actions-changed-files-action-is-compromised
+      - https://unit42.paloaltonetworks.com/github-actions-supply-chain-attack/
+    incident: tj-actions-cascade-2025-03
+    fixed_in: v46.0.1
+    confidence: ghsa
     severity: critical
     added: 2025-03-15
     added_by: pauline@huggingface.co
 
+  # ──────────────────────────────────────────────────────────────────────
+  # Incident: reviewdog-cascade-2025-03
+  # reviewdog/action-setup@v1 was force-pushed to a malicious commit on
+  # 2025-03-11 18:42–20:31 UTC. Every reviewdog action that depended on
+  # action-setup@v1 was transitively compromised regardless of pinning.
+  # Same threat actor and cascade as tj-actions.
+  # GHSA-qmg3-hpqr-gqvc / CVE-2025-30154.
+  # ──────────────────────────────────────────────────────────────────────
+
   - action: reviewdog/action-setup
     bad_shas:
-      - 3f401fe1d58fe77e10d4e6e0c16193cf7dba1fbf
+      # GHSA-published malicious tag SHA
+      - f0d342d24037bb11d26b9bd8496e0808ba32e9ec
+      # Dangling commits authored by GitHub user "iLrmKCu86tjwp8"
+      # during the cascade window — Unit 42 IOC table.
+      - 0f176b316e1d41a945e574fc2ba76b0dc752d585
+      - 96be5a72d8adac89200e08658f69273912fe4783
+      - 61902a2b3c982d3551ad219bb0ff22f3663e44de
+      - f966d8d897bc8033657b8e77da56a988029ce8c7
+      - 909ace6b17fc4045030e55f5ac27ca99f276ae80
+      - 454c8a19a12cde77505464d7e4549500c8ac68d0
+      - 04d5b6d4c18c06d7df6edabf914d0ded986c3a87
+      - 81796e43b6348d628e3e739a910d50704a5292c1
+      - 8d73381aa1c2ccd12c8ddcfefa47aeb1443e67e3
+      - c27af8180030e1f3d0434473731f030dc1849edf
+      - efa6ce46bcaa8751ad223e44be7977798c909304
+      - 143a52c0d919c1a69bdeafeab564650f6939a2b3
+      - 31b1df0e735ad8511fd7df3be8cf9351d8cb4de7
     bad_versions:
-      - v1.3.0
-    reason: "CVE-2025-30154 — supply-chain compromise, March 2025"
-    advisory: https://github.com/advisories/GHSA-mrrh-fwg8-r2c3
+      - v1   # tag force-pushed during attack window
+    reason: "CVE-2025-30154 — tag hijack exfiltrated secrets via workflow logs; root of the March 2025 cascade"
+    cve: CVE-2025-30154
+    advisory: https://github.com/reviewdog/reviewdog/security/advisories/GHSA-qmg3-hpqr-gqvc
+    references:
+      - https://www.wiz.io/blog/new-github-action-supply-chain-attack-reviewdog-action-setup
+      - https://www.stepsecurity.io/blog/reviewdog-github-actions-are-compromised
+      - https://unit42.paloaltonetworks.com/github-actions-supply-chain-attack/
+    incident: reviewdog-cascade-2025-03
+    fixed_in: 3f401fe1d58fe77e10d665ab713057375e39b887   # post-revert v1 head
+    confidence: ghsa
     severity: critical
     added: 2025-03-17
     added_by: pauline@huggingface.co
+    notes: |
+      The previous entry pinned `3f401fe1d58fe77e10d4e6e0c16193cf7dba1fbf`,
+      which does not exist on the repository (HTTP 422 from the GitHub API)
+      and confused the fix SHA with the malicious SHA. Corrected 2026-05-19.
 
-  - action: rtCamp/action-slack-notify
+  - action: reviewdog/action-typos
+    bad_shas:
+      # Dangling commits authored by "iLrmKCu86tjwp8" — Unit 42 IOC table.
+      - 26f36301be817815fbcb896d2c85e89f04b17df4
+      - 9bb460e92befdbb6506d2e643ae06c8b50205f97
+      - 75b5741c6bd9de9815741a40a41844598d409e7b
+      - f33bbbbf1282af26b285a9a131e0bd43ca355e79
+      - 3a06be07e9c02ee1c5fede46928b6031d8d2383c
+      - 6db74f2d6b0600b8e38cf24b18fda283217e5ffb
+      - 1d10399139bd16e69ed2b7dbfda38735ea1cf324
+      - 3b9482055ba84ea8761eed6b3b9ecf9e79692a55
+      - 6c7b129ed2bbb59ed684c3847a587f4f4e94eaf8
+      - cb6e155e9dec580de71f0fe89f832d2d9932997b
+      - eb183376a83bdc6ecfc8168b22ffa6e2b1a9cb6e
+      - 5db6a72f3984e847a2a7d2a25169ca5e849798da
+      - 16c5092f4eb672004001d9bcdc0cf693fb76c1b4
+      - 1368857b9c9a47ba08727409ae9fbdeeba8a590a
+      - 48fbacf68b808429af544d0d7ebd90a5b4cec642
+    bad_versions:
+      - "< v1.17.2"
+    reason: "Transitively compromised via reviewdog/action-setup@v1 during 2025-03-11 cascade"
+    advisory: https://github.com/reviewdog/reviewdog/security/advisories/GHSA-qmg3-hpqr-gqvc
+    references:
+      - https://unit42.paloaltonetworks.com/github-actions-supply-chain-attack/
+    incident: reviewdog-cascade-2025-03
+    fixed_in: v1.17.2
+    confidence: unit42-ioc
+    severity: high
+    added: 2026-05-19
+    added_by: pauline@huggingface.co
+
+  - action: reviewdog/action-shellcheck
     bad_shas: []
     bad_versions:
-      - v1.0.0
-    reason: "Known credential leakage in early versions"
-    advisory: ""
+      - "< v1.29.2"
+    reason: "Transitively compromised via reviewdog/action-setup@v1; advisory confirms compromise but publishes no per-commit SHA"
+    advisory: https://github.com/reviewdog/reviewdog/security/advisories/GHSA-qmg3-hpqr-gqvc
+    incident: reviewdog-cascade-2025-03
+    fixed_in: v1.29.2
+    confidence: ghsa-version-only
     severity: high
+    added: 2026-05-19
+    added_by: pauline@huggingface.co
+    notes: |
+      No SHAs to block — pinact's min_age + comment-verify catches references
+      to the pre-fix tags. Upgrade the entry if/when discrete IOCs surface.
+
+  - action: reviewdog/action-staticcheck
+    bad_shas: []
+    bad_versions:
+      - "< v1.26.2"
+    reason: "Transitively compromised via reviewdog/action-setup@v1; advisory publishes no per-commit SHA"
+    advisory: https://github.com/reviewdog/reviewdog/security/advisories/GHSA-qmg3-hpqr-gqvc
+    incident: reviewdog-cascade-2025-03
+    fixed_in: v1.26.2
+    confidence: ghsa-version-only
+    severity: high
+    added: 2026-05-19
+    added_by: pauline@huggingface.co
+
+  - action: reviewdog/action-composite-template
+    bad_shas: []
+    bad_versions:
+      - "< v0.20.2"
+    reason: "Transitively compromised via reviewdog/action-setup@v1; advisory publishes no per-commit SHA"
+    advisory: https://github.com/reviewdog/reviewdog/security/advisories/GHSA-qmg3-hpqr-gqvc
+    incident: reviewdog-cascade-2025-03
+    fixed_in: v0.20.2
+    confidence: ghsa-version-only
+    severity: high
+    added: 2026-05-19
+    added_by: pauline@huggingface.co
+
+  - action: reviewdog/action-ast-grep
+    bad_shas: []
+    bad_versions:
+      - "< v1.26.2"
+    reason: "Transitively compromised via reviewdog/action-setup@v1; advisory publishes no per-commit SHA"
+    advisory: https://github.com/reviewdog/reviewdog/security/advisories/GHSA-qmg3-hpqr-gqvc
+    incident: reviewdog-cascade-2025-03
+    fixed_in: v1.26.2
+    confidence: ghsa-version-only
+    severity: high
+    added: 2026-05-19
+    added_by: pauline@huggingface.co
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Incident: trivy-tag-hijack-2026-03
+  # 2026-03-19 ~17:43 UTC, the "TeamPCP" threat actor force-pushed 76 of
+  # 77 trivy-action tags (v0.0.1–v0.34.2) and all 7 setup-trivy tags
+  # (v0.2.0–v0.2.6) to malicious commits that prepended an infostealer to
+  # the Trivy scan output. Fixed in trivy-action v0.35.0 / setup-trivy v0.2.6
+  # (post-fix retag). GHSA-69fq-xp46-6x23.
+  # ──────────────────────────────────────────────────────────────────────
+
+  - action: aquasecurity/trivy-action
+    bad_shas:
+      # Current tag SHAs on the repo — these ARE the malicious force-pushed
+      # commits as of 2026-05-19. Verified via `git ls-remote --tags`.
+      - f781cce5aab226378ee181d764ab90ea0be3cdd8   # v0.25.0
+      - a20de5420d57c4102486cdd9578b45609c99d7eb   # v0.26.0
+      - 5681af892cd0f4997658e2bacc62bd0a894cf564   # v0.27.0
+      - 915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2   # v0.28.0
+      - 18f2510ee396bbf400402947b394f2dd8c87dbb0   # v0.29.0
+      - 6c175e9c4083a92bbca2f9724c8a5e33bc2d97a5   # v0.30.0
+      - 76071ef0d7ec797419534a183b498b4d6366cf37   # v0.31.0
+      - dc5a429b52fcf669ce959baa2c2dd26090d2a6c4   # v0.32.0
+      - f9424c10c36e288d5fa79bd3dfd1aeb2d6eae808   # v0.33.0
+      - b6643a29fecd7f34b3597bc6acb0a98b03d33ff8   # v0.33.1
+      - c1824fd6edce30d7ab345a9989de00bbd46ef284   # v0.34.0
+    bad_versions:
+      - "<= v0.34.2"   # 76 of 77 tags force-pushed; full list in advisory
+    reason: "GHSA-69fq-xp46-6x23 — TeamPCP tag-hijack prepended infostealer to Trivy scan output"
+    advisory: https://github.com/aquasecurity/trivy/security/advisories/GHSA-69fq-xp46-6x23
+    references:
+      - https://github.com/aquasecurity/trivy-action/releases/tag/v0.35.0
+    incident: trivy-tag-hijack-2026-03
+    fixed_in: v0.35.0
+    confidence: upstream-postmortem
+    severity: critical
+    added: 2026-05-19
+    added_by: pauline@huggingface.co
+    notes: |
+      Only the last ten major versions are enumerated by SHA — earlier tags
+      (v0.0.1–v0.24.x) are too unlikely to be referenced in production
+      workflows to be worth listing individually. Block them via
+      `bad_versions` + pinact's age check.
+
+  - action: aquasecurity/setup-trivy
+    bad_shas: []
+    bad_versions:
+      - "v0.2.0"
+      - "v0.2.1"
+      - "v0.2.2"
+      - "v0.2.3"
+      - "v0.2.4"
+      - "v0.2.5"
+    reason: "GHSA-69fq-xp46-6x23 — same TeamPCP tag-hijack; pre-fix tags were deleted upstream, no SHAs to block"
+    advisory: https://github.com/aquasecurity/trivy/security/advisories/GHSA-69fq-xp46-6x23
+    incident: trivy-tag-hijack-2026-03
+    fixed_in: v0.2.6
+    confidence: ghsa-version-only
+    severity: critical
+    added: 2026-05-19
+    added_by: pauline@huggingface.co
+    notes: |
+      Aqua deleted the compromised tags upstream — the malicious SHAs are no
+      longer reachable through any ref, so a `bad_shas` list cannot match.
+      Any `uses: aquasecurity/setup-trivy@<old-sha>` reference will now fail
+      to resolve, which is the desired outcome.
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Pre-existing entry, no known CVE — kept for org policy reasons.
+  # ──────────────────────────────────────────────────────────────────────
+
+  - action: rtCamp/action-slack-notify
+    bad_shas:
+      - eb535ea6be742688b75436c98b1bd2dffb2b3503   # v1.0.0
+    bad_versions:
+      - v1.0.0
+    reason: "Internal policy: v1.0.0 predates the current secret-handling guidance; use v2.x or step-security/action-slack-notify"
+    advisory: ""
+    references:
+      - https://github.com/step-security/action-slack-notify
+    fixed_in: v2.3.3
+    confidence: community
+    severity: low
     added: 2026-05-18
     added_by: pauline@huggingface.co
+    notes: |
+      No formal CVE. step-security publishes a hardened fork they describe
+      as a "secure drop-in replacement", suggesting concerns but not a
+      named vulnerability. Treat this entry as an org preference, not an
+      advisory-backed block.
