@@ -118,3 +118,101 @@ jobs:
           bash ./registry/scripts/check.sh \
             ./registry/denylist.yaml \
             ./caller/.github/workflows
+
+  package-denylist-check:
+    name: Package denylist check (npm)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          path: caller
+          persist-credentials: false
+
+      - name: Checkout deny-actions-registry
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          repository: huggingface/deny-actions-registry
+          path: registry
+          ref: main
+          persist-credentials: false
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Run package denylist check
+        run: |
+          bash ./registry/scripts/check-packages.sh \
+            ./registry/deny-packages.yaml \
+            ./caller
+
+  osv-scan:
+    name: OSV vulnerability + malware scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          path: caller
+          persist-credentials: false
+
+      - name: Install osv-scanner
+        run: |
+          set -euo pipefail
+          VERSION="v2.3.8"
+          curl -fsSL -o /tmp/osv-scanner \
+            "https://github.com/google/osv-scanner/releases/download/${VERSION}/osv-scanner_linux_amd64"
+          sudo install -m 0755 /tmp/osv-scanner /usr/local/bin/osv-scanner
+          osv-scanner --version
+
+      - name: Run osv-scanner
+        id: osv
+        working-directory: caller
+        run: |
+          set +e
+          # Scans every supported lockfile in the tree (package-lock.json,
+          # pnpm-lock.yaml, yarn.lock, requirements.txt, Pipfile.lock, etc.)
+          # against the OSV database, which includes the OpenSSF
+          # malicious-packages feed.
+          osv-scanner scan source --recursive --format=table . | tee /tmp/osv.out
+          ec=${PIPESTATUS[0]}
+          echo "exitcode=$ec" >> "$GITHUB_OUTPUT"
+          # Exit codes (osv-scanner v2):
+          #   0   = no vulns found
+          #   1   = vulns found
+          #   128 = no supported files found → treat as pass
+          [[ "$ec" == "128" ]] && echo "::notice::osv-scanner found no supported lockfiles."
+
+      - name: Append summary
+        if: always()
+        run: |
+          {
+            echo "## OSV scan"
+            echo ""
+            case "${{ steps.osv.outputs.exitcode }}" in
+              0)   echo "**Result:** ✅ Passed — no vulnerabilities or malware found in OSV." ;;
+              128) echo "**Result:** ✅ Skipped — no supported lockfiles in caller repo." ;;
+              *)   echo "**Result:** ❌ Failed — see findings below." ;;
+            esac
+            echo ""
+            if [[ -s /tmp/osv.out ]]; then
+              echo "<details><summary>osv-scanner output</summary>"
+              echo ""
+              echo '```'
+              cat /tmp/osv.out
+              echo '```'
+              echo ""
+              echo "</details>"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail if OSV found issues
+        if: always()
+        run: |
+          ec="${{ steps.osv.outputs.exitcode }}"
+          # 128 = no supported files → treat as pass
+          [[ "$ec" == "128" ]] && exit 0
+          exit "$ec"

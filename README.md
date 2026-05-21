@@ -1,90 +1,58 @@
 # deny-actions-registry
 
-Org-wide denylist of GitHub Actions versions that must never run in
-`huggingface/*` workflows, plus a reusable validation workflow
-enforced via an Organization Ruleset.
+Org-wide guardrails for `huggingface/*` repos: blocks unsafe GitHub
+Actions and compromised npm packages on every PR via a reusable
+workflow.
 
-## What this protects against
+## What it protects against
 
-Three classes of risk on every PR / push to `main`:
+On every PR / push to `main`:
 
-1. **Non-pinned actions** — `uses: foo/bar@v1` (mutable tag) is rejected.
-   Only 40-char commit SHAs are accepted. Enforced by [pinact].
+1. **Non-pinned actions** — `uses: foo/bar@v1` (mutable tag) rejected.
+   Only 40-char commit SHAs accepted. Enforced by [pinact].
 2. **Comment / SHA mismatch** — `uses: foo/bar@<sha>  # v1.2.3` where
    the comment lies about the version is rejected.
-3. **Known-compromised SHAs** — anything listed in `denylist.yaml`
-   (CVE-2025-30066 tj-actions, reviewdog supply-chain, etc.) is rejected.
+3. **Known-compromised actions** — anything listed in `denylist.yaml`
+   is rejected.
+4. **Known-compromised npm packages** — anything listed in
+   `deny-packages.yaml`, or flagged by the OSV database, is rejected.
 
 [pinact]: https://github.com/suzuki-shunsuke/pinact
-
-## How it's wired
-
-```
-Org Ruleset (Required workflow)
-       │
-       ▼
-deny-actions-registry/.github/workflows/validate.yml
-       │
-       ├──► pinact --check          (pin + min_age + comment verify)
-       └──► scripts/check.sh        (denylist scan)
-```
-
-Every repo in scope inherits the check automatically — no per-repo file
-to maintain.
 
 ## Files
 
 | Path | Purpose |
 |---|---|
-| `denylist.yaml`              | Source of truth for blocked SHAs |
-| `.github/workflows/validate.yml`     | Reusable workflow called by the org ruleset |
-| `.github/workflows/advisory-sync.yml`| (TODO) Cron that auto-PRs new advisories |
-| `scripts/check.sh`           | Parses workflows + cross-checks denylist |
-| `.pinact.yaml`               | Self-pinning config for this repo |
-| `.github/CODEOWNERS`         | Required reviewers for denylist edits |
+| `denylist.yaml`                   | Blocked GitHub Actions SHAs |
+| `deny-packages.yaml`              | Blocked npm package versions |
+| `.github/workflows/security-gate.yml`  | Reusable workflow |
+| `scripts/`                        | Check scripts |
+| `.github/CODEOWNERS`              | Required reviewers for denylist edits |
 
 ## Adding an entry
 
-Open a PR editing `denylist.yaml`:
+Open a PR editing `denylist.yaml` or `deny-packages.yaml`. CODEOWNERS
+will request review. See the YAML headers in each file for the schema.
+
+## Caller usage
+
+Repos in scope inherit the checks automatically via an Organization
+Ruleset. Repos that opt in manually:
 
 ```yaml
-- action: owner/repo
-  bad_shas:
-    - <40-char SHA>
-  bad_versions:
-    - v1.2.3
-  reason: "Short description of the incident"
-  advisory: https://github.com/advisories/GHSA-...
-  severity: critical
-  added: YYYY-MM-DD
-  added_by: you@huggingface.co
-```
-
-CODEOWNERS will request review automatically.
-
-## Adding a repo to the protection scope
-
-Done via Organization Ruleset (preferred) — see
-`Organization Settings → Repository → Rulesets → New ruleset`,
-type *Branch*, target *all repositories* (or filtered by custom
-property), rule *Require workflows to pass*, pointing to:
-
-```
-huggingface/deny-actions-registry/.github/workflows/validate.yml@<sha>
-```
-
-## Caller-side usage
-
-While the org ruleset is the production path, repos can also call the
-workflow directly:
-
-```yaml
+name: security-validate
+on: pull_request
+permissions:
+  contents: read
+  pull-requests: write
 jobs:
   security:
-    uses: huggingface/deny-actions-registry/.github/workflows/validate.yml@<sha>
+    uses: huggingface/deny-actions-registry/.github/workflows/security-gate.yml@<sha>
 ```
+
+Pin to a SHA, not `@main`.
 
 ## Visibility
 
-This repo is **internal**. Keeping the denylist non-public avoids signaling
-to attackers which SHAs are being monitored.
+This repo is **public** — required so public `huggingface/*` repos can
+consume the reusable workflow.
