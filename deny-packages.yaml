@@ -1,0 +1,58 @@
+version: 1
+
+# Format:
+#   - package: <name>      # e.g. @ctrl/tinycolor, lodash
+#     ecosystem: npm       # npm only for now (pypi/maven can come later)
+#     bad_versions:        # exact version strings; matched literally
+#       - "1.2.3"
+#       - "1.2.4"
+#     reason: <short text>
+#     advisory: <url>
+#     severity: critical | high | medium | low
+#     added: YYYY-MM-DD
+#     added_by: <email or bot>
+#
+# Sources to keep this list up to date:
+#   - https://socket.dev/blog (supply chain incident reports)
+#   - https://www.aikido.dev/blog (publishes IOC lists for major waves)
+#   - https://github.com/advisories (GitHub Advisory DB — malware tag)
+#   - https://osv.dev (Open Source Vulnerabilities)
+
+entries:
+  # ---------------------------------------------------------------------------
+  # s1ngularity — nx supply-chain compromise (Aug 26–27, 2025)
+  # Compromised versions exfiltrated developer secrets via postinstall script.
+  # Public IOCs: https://socket.dev/blog/nx-packages-compromised
+  # ---------------------------------------------------------------------------
+  - package: nx
+    ecosystem: npm
+    bad_versions:
+      - "20.9.0"
+      - "20.10.0"
+      - "20.11.0"
+      - "20.12.0"
+      - "21.5.0"
+      - "21.6.0"
+      - "21.7.0"
+      - "21.8.0"
+    reason: "s1ngularity supply-chain attack — postinstall script exfiltrated CI secrets"
+    advisory: https://socket.dev/blog/nx-packages-compromised
+    severity: critical
+    added: 2026-05-18
+    added_by: pauline@huggingface.co
+
+  # ---------------------------------------------------------------------------
+  # Shai-Hulud worm (Sep 2025) — self-propagating npm worm via maintainer
+  # account compromise. Hundreds of packages affected; entries below cover
+  # the initial wave. Track Aikido/Socket for the full list.
+  # ---------------------------------------------------------------------------
+  - package: "@ctrl/tinycolor"
+    ecosystem: npm
+    bad_versions:
+      - "4.1.1"
+      - "4.1.2"
+    reason: "Shai-Hulud worm — initial entry point of the npm worm wave"
+    advisory: https://www.aikido.dev/blog/shai-hulud-npm-worm
+    severity: critical
+    added: 2026-05-18
+    added_by: pauline@huggingface.co
