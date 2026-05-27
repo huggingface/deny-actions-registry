@@ -1,0 +1,86 @@
+name: daily-scan
+
+# Daily org-wide scan for unpinned / denylisted GitHub Actions.
+#
+# Reads every public, non-archived, non-fork repo in `huggingface/*`,
+# scans its `.github/workflows/` directory with pinact + the denylist
+# in this repo, and files one tracking issue per violating repo in
+# `huggingface/tracking-issues`. Subsequent runs update or close
+# existing issues idempotently — no spam.
+#
+# Auth: a dedicated GitHub App (deny-actions-scanner) with permissions:
+#   - org installation, repository "contents: read" + "metadata: read"
+#   - on huggingface/tracking-issues: "issues: write"
+# Secrets required in this repo's environment:
+#   - vars.SCANNER_APP_ID        : numeric App ID
+#   - secrets.SCANNER_APP_PRIVATE_KEY : PEM private key
+
+on:
+  schedule:
+    - cron: "0 7 * * *"  # 07:00 UTC daily (1h after advisory-sync)
+  workflow_dispatch:
+    inputs:
+      max_repos:
+        description: "Limit number of repos scanned (testing). Empty = scan all."
+        required: false
+        default: ""
+      dry_run:
+        description: "If true, don't create/update/close issues."
+        type: boolean
+        required: false
+        default: false
+
+permissions: {}
+
+jobs:
+  scan:
+    name: Scan huggingface/* workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout deny-actions-registry
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Mint scanner App token
+        id: token
+        uses: actions/create-github-app-token@67018539274d69449ef7c02e8e71183d1719ab42  # v2.1.4
+        with:
+          app-id: ${{ vars.SCANNER_APP_ID }}
+          private-key: ${{ secrets.SCANNER_APP_PRIVATE_KEY }}
+          owner: huggingface
+
+      - name: Install pinact
+        run: |
+          set -euo pipefail
+          VERSION="v3.6.0"
+          curl -fsSL -o /tmp/pinact.tar.gz \
+            "https://github.com/suzuki-shunsuke/pinact/releases/download/${VERSION}/pinact_linux_amd64.tar.gz"
+          tar -xzf /tmp/pinact.tar.gz -C /tmp pinact
+          sudo install -m 0755 /tmp/pinact /usr/local/bin/pinact
+          pinact --version
+
+      - name: Install Python deps
+        run: pip install --quiet pyyaml
+
+      - name: Run org-wide scan
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          MAX_REPOS: ${{ inputs.max_repos }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          extra=()
+          if [[ -n "${MAX_REPOS:-}" ]]; then
+            extra+=(--max-repos "$MAX_REPOS")
+          fi
+          if [[ "${DRY_RUN:-false}" == "true" ]]; then
+            extra+=(--dry-run)
+          fi
+          python3 scripts/scan-org.py \
+            --org huggingface \
+            --denylist denylist.yaml \
+            --tracking-repo huggingface/tracking-issues \
+            "${extra[@]}"

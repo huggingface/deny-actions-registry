@@ -27,6 +27,8 @@ name: validate
 on:
   workflow_call:
   pull_request:
+    paths:
+      - '.github/workflows/**'
 
 jobs:
   pinact-check:
