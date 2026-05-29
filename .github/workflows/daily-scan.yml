@@ -2,8 +2,9 @@ name: daily-scan
 
 # Daily org-wide scan for unpinned / denylisted GitHub Actions.
 #
-# Reads every public, non-archived, non-fork repo in `huggingface/*`,
-# scans its `.github/workflows/` directory with pinact + the denylist
+# Reads every non-archived, non-fork repo in `huggingface/*` — all
+# visibilities (public, private, internal) — scans its
+# `.github/workflows/` directory with pinact + the denylist
 # in this repo, and files one tracking issue per violating repo in
 # `huggingface/tracking-issues`. Subsequent runs update or close
 # existing issues idempotently — no spam.

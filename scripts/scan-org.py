@@ -2,7 +2,8 @@
 """
 Daily org-wide scan for unpinned / denylisted GitHub Actions.
 
-For each public, non-archived, non-fork repo in the target org:
+For each non-archived, non-fork repo in the target org (all visibilities —
+public, private and internal):
   1. Fetch every file under `.github/workflows/` via the GitHub API.
   2. Run `pinact run --check` on the downloaded files to find unpinned actions.
   3. Cross-check every `uses: action@sha` reference against the denylist's
@@ -81,9 +82,12 @@ def parse_next_link(link_header: str) -> str | None:
 
 
 def list_org_repos(token: str, org: str) -> list[dict]:
-    """Public, non-archived, non-fork repos in the org."""
+    """Non-archived, non-fork repos in the org, all visibilities
+    (public + private + internal). `type=all` returns every repo the
+    authenticated token can see — for the scanner App that is all repos
+    it is installed on."""
     repos = []
-    url = f"{API_ROOT}/orgs/{org}/repos?type=public&per_page=100"
+    url = f"{API_ROOT}/orgs/{org}/repos?type=all&per_page=100"
     while url:
         page, link = gh_api(token, "GET", url)
         if page is None:
@@ -91,7 +95,11 @@ def list_org_repos(token: str, org: str) -> list[dict]:
         for r in page:
             if r.get("archived") or r.get("fork") or r.get("disabled"):
                 continue
-            repos.append({"full_name": r["full_name"], "name": r["name"]})
+            repos.append({
+                "full_name": r["full_name"],
+                "name": r["name"],
+                "visibility": r.get("visibility", "public"),
+            })
         url = parse_next_link(link)
     return repos
 
