@@ -10,10 +10,23 @@ name: validate
 #   B. Caller-defined workflow that calls this one with `uses:` (legacy /
 #      opt-in mode). Requires the `workflow_call` trigger below.
 #
-# Two checks against the caller repo's workflows:
-#   1. pinact : every `uses:` must be pinned to a 40-char SHA.
-#   2. denylist : no `uses:` may reference a SHA listed in this repo's
-#      denylist.yaml.
+# Checks, split into two groups gated by which files a PR touches (see the
+# `detect-changes` job below):
+#   Actions group — runs only when `.github/workflows/**` changed:
+#     1. pinact   : every `uses:` must be pinned to a 40-char SHA.
+#     2. denylist : no `uses:` may reference a SHA listed in denylist.yaml.
+#   Dependency group — runs only when a package manifest / lockfile changed:
+#     3. package denylist : no known-malicious npm/PyPI version present.
+#     4. osv-scan         : lockfiles scanned against the OSV malware feed.
+#
+# Why gate by path: this workflow is enforced org-wide via the required-
+# workflow ruleset, so it fires on every PR in every target repo. Running
+# the heavy installers (pinact / osv-scanner / yq) on PRs that touch neither
+# workflows nor dependencies spams large repos — and on fork PRs the
+# read-only GITHUB_TOKEN makes the suggestion step noisy. Keeping it in ONE
+# workflow file (one required check) means a PR is never stuck waiting on a
+# check that never reports: `detect-changes` always runs and reports; the
+# expensive jobs simply skip when irrelevant (a skipped job is not a failure).
 #
 # Fixable violations are posted as inline `Apply suggestion` review
 # comments — never auto-pushed. The PR author clicks each suggestion to
@@ -27,12 +40,62 @@ name: validate
 on:
   workflow_call:
   pull_request:
-    paths:
-      - '.github/workflows/**'
 
 jobs:
+  detect-changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      workflows: ${{ steps.detect.outputs.workflows }}
+      deps: ${{ steps.detect.outputs.deps }}
+    steps:
+      - name: Determine which file groups the PR touches
+        id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          # Non-PR invocations (workflow_call / push) have no diff to scope
+          # against → run every group.
+          if [[ -z "${PR_NUMBER:-}" ]]; then
+            echo "Not a pull_request → scanning all groups."
+            echo "workflows=true" >> "$GITHUB_OUTPUT"
+            echo "deps=true"      >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # List changed files via the API (no checkout, no git history
+          # needed — works for fork PRs with the read-only token too).
+          files=$(gh api --paginate \
+            "repos/${GH_REPO}/pulls/${PR_NUMBER}/files" \
+            --jq '.[].filename')
+          echo "Changed files:"; echo "$files"
+
+          wf=false; dep=false
+          while IFS= read -r f; do
+            [[ -z "$f" ]] && continue
+            case "$f" in
+              .github/workflows/*) wf=true ;;
+            esac
+            case "$(basename "$f")" in
+              package.json|package-lock.json|pnpm-lock.yaml|yarn.lock|npm-shrinkwrap.json) dep=true ;;
+              requirements*.txt|Pipfile|Pipfile.lock|poetry.lock|pyproject.toml|setup.py|setup.cfg) dep=true ;;
+            esac
+          done <<< "$files"
+
+          echo "→ workflows=$wf  deps=$dep"
+          echo "workflows=$wf" >> "$GITHUB_OUTPUT"
+          echo "deps=$dep"     >> "$GITHUB_OUTPUT"
+
   pinact-check:
     name: Pin check (SHA + comment)
+    needs: detect-changes
+    if: needs.detect-changes.outputs.workflows == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -93,6 +156,8 @@ jobs:
 
   denylist-check:
     name: Denylist check
+    needs: detect-changes
+    if: needs.detect-changes.outputs.workflows == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout caller repo
@@ -123,6 +188,8 @@ jobs:
 
   package-denylist-check:
     name: Package denylist check (npm)
+    needs: detect-changes
+    if: needs.detect-changes.outputs.deps == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout caller repo
@@ -153,6 +220,8 @@ jobs:
 
   osv-scan:
     name: OSV vulnerability + malware scan
+    needs: detect-changes
+    if: needs.detect-changes.outputs.deps == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout caller repo
@@ -218,3 +287,5 @@ jobs:
           # 128 = no supported files → treat as pass
           [[ "$ec" == "128" ]] && exit 0
           exit "$ec"
+
+# (gating active: detect-changes scopes jobs by changed paths)
