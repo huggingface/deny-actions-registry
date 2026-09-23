@@ -89,7 +89,9 @@ jobs:
 
       - name: Fail if pinact found violations
         if: always()
-        run: exit "${{ steps.pinact.outputs.exitcode }}"
+        run: exit "${STEPS_PINACT_OUTPUTS_EXITCODE}"
+        env:
+          STEPS_PINACT_OUTPUTS_EXITCODE: ${{ steps.pinact.outputs.exitcode }}
 
   denylist-check:
     permissions:
@@ -200,7 +202,7 @@ jobs:
           {
             echo "## OSV scan"
             echo ""
-            case "${{ steps.osv.outputs.exitcode }}" in
+            case "${STEPS_OSV_OUTPUTS_EXITCODE}" in
               0)   echo "**Result:** ✅ Passed — no vulnerabilities or malware found in OSV." ;;
               128) echo "**Result:** ✅ Skipped — no supported lockfiles in caller repo." ;;
               *)   echo "**Result:** ❌ Failed — see findings below." ;;
@@ -216,11 +218,15 @@ jobs:
               echo "</details>"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          STEPS_OSV_OUTPUTS_EXITCODE: ${{ steps.osv.outputs.exitcode }}
 
       - name: Fail if OSV found issues
         if: always()
         run: |
-          ec="${{ steps.osv.outputs.exitcode }}"
+          ec="${STEPS_OSV_OUTPUTS_EXITCODE}"
           # 128 = no supported files → treat as pass
           [[ "$ec" == "128" ]] && exit 0
           exit "$ec"
+        env:
+          STEPS_OSV_OUTPUTS_EXITCODE: ${{ steps.osv.outputs.exitcode }}
