@@ -28,6 +28,8 @@ on:
   workflow_call:
   pull_request:
 
+permissions: {}
+
 jobs:
   pinact-check:
     name: Pin check (SHA + comment)
@@ -90,6 +92,8 @@ jobs:
         run: exit "${{ steps.pinact.outputs.exitcode }}"
 
   denylist-check:
+    permissions:
+      contents: read
     name: Denylist check
     runs-on: ubuntu-latest
     steps:
@@ -120,6 +124,8 @@ jobs:
             ./caller/.github/workflows
 
   package-denylist-check:
+    permissions:
+      contents: read
     name: Package denylist check (npm)
     runs-on: ubuntu-latest
     steps:
@@ -150,6 +156,8 @@ jobs:
             ./caller
 
   osv-scan:
+    permissions:
+      contents: read
     name: OSV vulnerability + malware scan
     runs-on: ubuntu-latest
     steps:
